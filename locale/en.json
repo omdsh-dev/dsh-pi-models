@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "pi models bridge",
+    "description": "Projects the providers, models, keys and thinking levels configured in pi's models.json into this Harness's model picker."
+  }
+}

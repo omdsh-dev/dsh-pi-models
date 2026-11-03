@@ -1,0 +1,7 @@
+# Bundle patch layer: the pi-models Host row. It reads the pi agent directory,
+# converts pi's provider declarations into llm-pi-ai profiles, stores their
+# keys through the credential seam, and writes the projection into the mounted
+# `llm-pi-ai` entry's `providers` dictionary.
+- insert:
+    - id: pi-models
+      name: dsh-pi-models

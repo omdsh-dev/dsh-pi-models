@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="pi models bridge">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0b1220"/>
+      <stop offset="1" stop-color="#13233d"/>
+    </linearGradient>
+    <linearGradient id="ink" x1="16" y1="20" x2="44" y2="44" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f8fafc"/>
+      <stop offset="1" stop-color="#7dd3fc"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#bg)" stroke="#1e293b" stroke-width="2"/>
+  <path d="M16 21h18" stroke="url(#ink)" stroke-width="4.5" stroke-linecap="round"/>
+  <path d="M22 21v22" stroke="url(#ink)" stroke-width="4.5" stroke-linecap="round"/>
+  <path d="M30 21v8.5c0 4 2.6 6.5 6 6.5" stroke="url(#ink)" stroke-width="4.5" stroke-linecap="round" fill="none"/>
+  <path d="M37 36h13" stroke="#34d399" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="m46 31.5 4.5 4.5-4.5 4.5" stroke="#34d399" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install (peer resolution only)
+        run: pnpm install --frozen-lockfile --ignore-scripts || pnpm install --ignore-scripts
+      - name: Dry-run pack and assert manifest files exist
+        run: |
+          pnpm pack --dry-run --json > pack.json
+          node -e '
+            const fs = require("fs");
+            const [{ files, name, version }] = JSON.parse(fs.readFileSync("pack.json", "utf8"));
+            const names = files.map(f => f.path);
+            const required = ["index.js", "cordis.patch.yml", "icon.svg", "README.md", "LICENSE", "locale/en.json", "locale/zh.json",
+              "src/bridge.js", "src/convert.js", "src/catalog.js", "src/project.js"];
+            const missing = required.filter(r => !names.includes(r));
+            if (missing.length) { console.error("missing from pack:", missing); process.exit(1); }
+            console.log(`ok: ${name}@${version} packs ${files.length} files`);
+          '
