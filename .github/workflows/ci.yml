@@ -14,7 +14,6 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: pnpm
       - name: Install peer for pack resolution (best-effort)
         run: pnpm install --ignore-scripts || true
       - name: Dry-run pack and assert manifest files exist
