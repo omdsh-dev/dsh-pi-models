@@ -21,11 +21,15 @@ jobs:
           pnpm pack --dry-run --json > pack.json
           node -e '
             const fs = require("fs");
-            const [{ files, name, version }] = JSON.parse(fs.readFileSync("pack.json", "utf8"));
-            const names = files.map(f => f.path);
+            const parsed = JSON.parse(fs.readFileSync("pack.json", "utf8"));
+            // pnpm --dry-run --json may emit an array, an object, or trailing warnings.
+            const obj = Array.isArray(parsed) ? parsed[0] : parsed;
+            const name = obj.name, version = obj.version;
+            let files = obj.files;
+            const names = Array.isArray(files) ? files.map(f => f.path) : Object.keys(files || {});
             const required = ["index.js", "cordis.patch.yml", "icon.svg", "README.md", "LICENSE", "locale/en.json", "locale/zh.json",
               "src/bridge.js", "src/convert.js", "src/catalog.js", "src/project.js"];
             const missing = required.filter(r => !names.includes(r));
             if (missing.length) { console.error("missing from pack:", missing); process.exit(1); }
-            console.log(`ok: ${name}@${version} packs ${files.length} files`);
+            console.log(`ok: ${name}@${version} packs ${names.length} files`);
           '
