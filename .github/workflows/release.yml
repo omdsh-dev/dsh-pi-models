@@ -25,8 +25,8 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      - name: Install (peer resolution only)
-        run: pnpm install --frozen-lockfile --ignore-scripts || pnpm install --ignore-scripts
+      - name: Install peer for pack resolution (best-effort)
+        run: pnpm install --ignore-scripts || true
       - name: Pack the artifact
         run: |
           pnpm pack --pack-destination dist
