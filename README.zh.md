@@ -98,7 +98,7 @@ Harness；`config: { watch: true }` 已能在 `models.json` 变化时无需任�
 
 ```sh
 # 在承载 bundle 的 profile 目录
-dsh plugin --profile <profile> add "https://github.com/omdsh-dev/dsh-pi-models/releases/download/v0.1.0/pkg.tgz"
+dsh plugin --profile <profile> add "https://github.com/omdsh-dev/dsh-pi-models/releases/latest/download/pkg.tgz"
 ```
 
 或从某个 release 解包 `dist/pkg.tgz`，把 `dsh plugin add` 指向该目录。然后在

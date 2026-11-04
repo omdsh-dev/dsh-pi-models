@@ -115,7 +115,7 @@ and install it locally:
 
 ```sh
 # from the profile that will host the bundle
-dsh plugin --profile <profile> add "https://github.com/omdsh-dev/dsh-pi-models/releases/download/v0.1.0/pkg.tgz"
+dsh plugin --profile <profile> add "https://github.com/omdsh-dev/dsh-pi-models/releases/latest/download/pkg.tgz"
 ```
 
 or unpack `dist/pkg.tgz` from a release and point `dsh plugin add` at the
