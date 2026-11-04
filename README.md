@@ -24,7 +24,7 @@ startup does not rewrite the profile's configuration.
 | `providers.<name>.api` | `api` (only `openai-completions`, `openai-responses`, `anthropic-messages`) |
 | `providers.<name>.apiKey` | `apiKeyEnv` — literal keys are stored in the credential store under `PI_MODELS_<PROVIDER>_API_KEY`; a pi `$NAME` value keeps `NAME` as the reference; a pi `!command` value is run once per sync and stored the same way |
 | pi `auth.json` API key | same as `apiKey`, when the provider entry has none |
-| `providers.<name>.headers` | `headers` (literal values only) |
+| `providers.<name>.headers` | `headers` (`$NAME` values resolve from the process environment; `!command` values are not run and the header is dropped with a note) |
 | `providers.<name>.compat` | `compat` (withheld switches dropped) |
 | `models[].id`, `name` | model id, display name |
 | `models[].contextWindow`, `maxTokens`, `input` | the same fields |

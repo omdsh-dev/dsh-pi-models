@@ -26,11 +26,10 @@ const execFileAsync = promisify(execFile)
 /**
  * Defaults for every field this plugin reads.
  *
- * The plugin deliberately ships no Schemastery `Config`: a linked workspace
- * bundle resolves its own bare imports from its checkout, where the Harness
- * packages are absent. The patch row may still carry every field; unknown
- * fields are ignored, and a malformed field fails activation with a message
- * naming it.
+ * The entry module ships the Schemastery `Config` the Loader validates
+ * against, and its defaults mirror this table; normalizeConfig still applies
+ * as the last word inside apply(). Unknown fields are ignored, and a
+ * malformed field fails activation with a message naming it.
  */
 const DEFAULTS = {
   /** pi agent directory; empty means `$PI_CODING_AGENT_DIR`, then `~/.pi/agent`. */
@@ -211,6 +210,10 @@ export function apply(ctx, rawConfig, modules) {
     /** Log a message once per distinct text, so a watched file does not spam. */
     const report = (key, level, message) => {
       if (state.reported.get(key) === message) return
+      // Keys embed error details, which can vary without bound; cap the map
+      // so a long-lived Host plugin does not grow it forever. Clearing loses
+      // some de-duplication but never correctness.
+      if (state.reported.size >= 256) state.reported.clear()
       state.reported.set(key, message)
       logger[level](message)
     }

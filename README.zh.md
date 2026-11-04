@@ -21,7 +21,7 @@ pi 保持唯一数据源。文件被监听：在 `~/.pi/agent/models.json` 中�
 | `providers.<name>.api` | `api`（仅 `openai-completions`、`openai-responses`、`anthropic-messages`）|
 | `providers.<name>.apiKey` | `apiKeyEnv` —— 字面密钥存入凭据库 `PI_MODELS_<PROVIDER>_API_KEY`；pi 的 `$NAME` 值保留 `NAME` 作为引用；pi 的 `!command` 值每次同步执行一次并以同样方式存储 |
 | pi `auth.json` API key | 与 `apiKey` 相同，当 provider 条目没有时启用 |
-| `providers.<name>.headers` | `headers`（仅字面值）|
+| `providers.<name>.headers` | `headers`（`$NAME` 值从进程环境解析；`!command` 值不执行，该 header 被丢弃并记录）|
 | `providers.<name>.compat` | `compat`（丢弃被扣留的开关）|
 | `models[].id`、`name` | model id、显示名 |
 | `models[].contextWindow`、`maxTokens`、`input` | 同名字段 |

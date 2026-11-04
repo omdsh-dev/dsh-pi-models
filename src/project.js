@@ -20,6 +20,9 @@
  * Whether a configured route carries this bridge's generated credential
  * reference. Kept here as well as in the conversion so this module stays
  * import-free for the entry's versioned import.
+ *
+ * The `PI_MODELS_` prefix and `_API_KEY` suffix duplicate
+ * `MANAGED_REF_PREFIX` in convert.js; change both files together.
  * @param profile - one configured provider profile.
  * @returns whether this bridge generated the profile's credential reference.
  */

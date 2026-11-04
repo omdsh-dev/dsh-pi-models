@@ -69,7 +69,13 @@ const COMPAT_FIELDS = {
 /** Wire protocols this bridge can pin a route to. */
 export const SUPPORTED_APIS = Object.keys(COMPAT_FIELDS)
 
-/** The credential-reference prefix this bridge owns; it also marks managed routes. */
+/**
+ * The credential-reference prefix this bridge owns; it also marks managed routes.
+ *
+ * project.js duplicates this constant and the `isManagedProfile` check as
+ * literals, because it must stay import-free for the entry's versioned
+ * import. Change the prefix or the `_API_KEY` suffix in both files together.
+ */
 export const MANAGED_REF_PREFIX = 'PI_MODELS_'
 
 /**
