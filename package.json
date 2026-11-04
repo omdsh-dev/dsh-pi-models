@@ -1,6 +1,6 @@
 {
   "name": "dsh-pi-models",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Project the providers, models, keys and thinking levels configured in pi's models.json into this DeepSeek Harness model picker.",
   "keywords": [
     "cordis",
