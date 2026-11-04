@@ -21,12 +21,46 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
+/** The provider surface this bridge reads off an installed catalog entry. */
+export interface PiCatalogProvider {
+  id: string
+  name?: string
+  baseUrl?: string
+  models: Map<string, PiCatalogModel>
+}
+
+/** The model surface the conversion reads off an installed catalog entry. */
+export interface PiCatalogModel {
+  id: string
+  name?: string
+  api?: string
+  baseUrl?: string
+  contextWindow?: number
+  maxTokens?: number
+  input?: unknown
+  reasoning?: boolean
+  thinkingLevelMap?: Record<string, string | null>
+  compat?: Record<string, unknown>
+}
+
+/** The catalog answer: providers by id, plus the import error when pi-ai is unavailable. */
+export interface PiCatalogResult {
+  providers: Map<string, PiCatalogProvider>
+  error: unknown
+}
+
+/** The slice of `@earendil-works/pi-ai`'s providers/all module this bridge probes for. */
+interface PiAiCatalogModule {
+  builtinProviders?: unknown
+  builtinModels?: unknown
+}
+
 /** Resolution is attempted once per process generation. */
-let pending
+let pending: Promise<PiCatalogResult> | undefined
 
 /** Candidate `@earendil-works/pi-ai` package directories, nearest last. */
-function packageCandidates() {
-  const starts = []
+function packageCandidates(): string[] {
+  const starts: string[] = []
   if (typeof process.argv[1] === 'string' && process.argv[1].length > 0) {
     // The `dsh` bin is a package-manager symlink; the installation's
     // node_modules sits beside its real path.
@@ -44,7 +78,7 @@ function packageCandidates() {
   } catch {
     // A non-file module URL simply contributes no candidate.
   }
-  const candidates = []
+  const candidates: string[] = []
   for (const start of starts) {
     let directory = start
     for (;;) {
@@ -58,7 +92,7 @@ function packageCandidates() {
 }
 
 /** The import target of the `./providers/all` export, read from the manifest. */
-function providersEntry(directory) {
+function providersEntry(directory: string): string {
   try {
     const manifest = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8'))
     const entry = manifest.exports?.['./providers/all']
@@ -71,7 +105,7 @@ function providersEntry(directory) {
 }
 
 /** Import the catalog from the running installation when the bare specifier fails. */
-async function importInstalled() {
+async function importInstalled(): Promise<PiAiCatalogModule | undefined> {
   for (const directory of packageCandidates()) {
     try {
       if (!existsSync(join(directory, 'package.json'))) continue
@@ -85,9 +119,12 @@ async function importInstalled() {
   return undefined
 }
 
-async function readCatalog() {
-  let module
+async function readCatalog(): Promise<PiCatalogResult> {
+  // The dynamically imported pi-ai module is an external, defensively probed
+  // boundary, so its binding stays untyped here.
+  let module: any
   try {
+    // @ts-ignore — pi-ai is resolved from the running Harness installation, not from this package's dependencies
     module = await import('@earendil-works/pi-ai/providers/all')
   } catch (bareError) {
     try {
@@ -97,7 +134,7 @@ async function readCatalog() {
     }
     if (module === undefined) return { providers: new Map(), error: bareError }
   }
-  const providers = new Map()
+  const providers = new Map<string, PiCatalogProvider>()
   try {
     const list = typeof module.builtinProviders === 'function'
       ? module.builtinProviders()
@@ -106,7 +143,7 @@ async function readCatalog() {
         : []
     for (const provider of list) {
       if (!provider || typeof provider.id !== 'string' || provider.id.length === 0) continue
-      const models = new Map()
+      const models = new Map<string, PiCatalogModel>()
       try {
         for (const model of provider.getModels?.() ?? []) if (typeof model?.id === 'string') models.set(model.id, model)
       } catch {
@@ -131,7 +168,7 @@ async function readCatalog() {
  * @returns provider id → `{ name, baseUrl, models: Map<id, Model> }`, plus the
  *   import error when pi-ai is unavailable.
  */
-export function loadPiCatalog() {
+export function loadPiCatalog(): Promise<PiCatalogResult> {
   pending ??= readCatalog()
   return pending
 }

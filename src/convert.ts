@@ -15,6 +15,149 @@
  * @module dsh-pi-models/convert
  */
 
+import type { PiCatalogModel, PiCatalogProvider } from './catalog.js'
+
+/**
+ * pi's `models.json` — an external, unversioned contract (pi.dev); only the
+ * fields this bridge reads are declared. The bridge validates that `providers`
+ * is an object before the conversion runs, so it is required here.
+ */
+export interface PiModelsJson {
+  providers: Record<string, PiProvider>
+}
+
+/** One pi provider declaration; every field is optional in the wild. */
+export interface PiProvider {
+  name?: string
+  api?: string
+  baseUrl?: string
+  /** A literal key, a `$NAME` environment reference, or a `!command` source. */
+  apiKey?: unknown
+  oauth?: unknown
+  headers?: Record<string, unknown>
+  compat?: Record<string, unknown>
+  models?: PiModel[]
+}
+
+/** One pi model declaration; only the fields this bridge reads are declared. */
+export interface PiModel {
+  id: string
+  name?: string
+  api?: string
+  baseUrl?: string
+  contextWindow?: number
+  maxTokens?: number
+  input?: unknown
+  reasoning?: boolean
+  thinkingLevelMap?: Record<string, string | null>
+  compat?: Record<string, unknown>
+}
+
+/** One entry of pi's `auth.json` (external contract). */
+export interface PiAuthEntry {
+  type?: string
+  key?: unknown
+}
+
+/** pi's `auth.json`, keyed by provider route. */
+export type PiAuthFile = Record<string, PiAuthEntry>
+
+/** One projected model entry in an adapter profile. */
+export interface ProfileModel {
+  id: string
+  name?: string
+  contextWindow: number
+  maxTokens: number
+  input: string[]
+  reasoningEfforts?: Record<string, string | null> | false
+  compat?: Record<string, unknown>
+}
+
+/** One projected provider profile for the mounted pi-ai adapter. */
+export interface ProviderProfile {
+  displayName: string
+  api: string
+  baseURL: string
+  models: ProfileModel[]
+  apiKeyEnv?: string
+  compat?: Record<string, unknown>
+  headers?: Record<string, string>
+}
+
+/** A credential value the projection asks the credential store to hold. */
+export interface CredentialWrite {
+  ref: string
+  value: string
+  route: string
+}
+
+/** A command-sourced key the bridge resolves (or skips) per its policy. */
+export interface CommandKey {
+  ref: string
+  command: string
+  route: string
+}
+
+/** A provider or model that could not be projected, with the reason why. */
+export interface ConversionNote {
+  route: string
+  model?: string
+  reason: string
+}
+
+/** A provider route the conversion skipped, with the reason why. */
+export interface SkippedRoute {
+  route: string
+  reason: string
+}
+
+/** Conversion switches handed in from the plugin configuration. */
+export interface ConvertOptions {
+  includeCatalogModels?: boolean
+  include?: string[]
+  exclude?: string[]
+}
+
+/** Everything the pure conversion reads: parsed pi files, catalog, options. */
+export interface ConvertInput {
+  models: PiModelsJson
+  auth?: PiAuthFile
+  catalog?: Map<string, PiCatalogProvider>
+  env?: (name: string) => string | undefined
+  options?: ConvertOptions
+}
+
+/** The conversion's full answer: profiles, credentials, and every drop. */
+export interface ConvertResult {
+  providers: Record<string, ProviderProfile>
+  credentials: CredentialWrite[]
+  commands: CommandKey[]
+  skipped: SkippedRoute[]
+  notes: ConversionNote[]
+}
+
+/** How one pi provider-level API key is sourced. */
+type ClassifiedApiKey =
+  | { kind: 'reference', ref: string }
+  | { kind: 'command', command: string }
+  | { kind: 'literal', value: string }
+  | undefined
+
+/** Everything convertProvider needs that the route loop owns. */
+interface ConvertContext {
+  catalog: Map<string, PiCatalogProvider> | undefined
+  env: (name: string) => string | undefined
+  auth: PiAuthFile | undefined
+  options: { includeCatalogModels: boolean }
+  notes: ConversionNote[]
+  refFor: (route: string) => string
+}
+
+/** One provider's conversion answer: the profile and its keys, or a skip. */
+type ProviderConversion =
+  | { profile: ProviderProfile, credentials: CredentialWrite[], commands: CommandKey[], skip?: undefined }
+  | { skip: string, profile?: undefined, credentials?: undefined, commands?: undefined }
+
 const LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 
 /** pi's documented fallbacks when neither the entry nor the catalog sizes a model. */
@@ -27,7 +170,7 @@ const PI_DEFAULT_MAX_TOKENS = 16384
  * the adapter refuses it at configuration time, so passing it through would
  * reject the whole projection.
  */
-const COMPAT_FIELDS = {
+const COMPAT_FIELDS: Record<string, Set<string>> = {
   'openai-completions': new Set([
     'supportsStore',
     'supportsDeveloperRole',
@@ -85,7 +228,7 @@ export const MANAGED_REF_PREFIX = 'PI_MODELS_'
  * @param profile - one configured provider profile.
  * @returns whether this bridge generated the profile's credential reference.
  */
-export function isManagedProfile(profile) {
+export function isManagedProfile(profile: { apiKeyEnv?: unknown } | null | undefined): boolean {
   const ref = profile?.apiKeyEnv
   return typeof ref === 'string' && ref.startsWith(MANAGED_REF_PREFIX) && ref.endsWith('_API_KEY')
 }
@@ -96,7 +239,7 @@ export function isManagedProfile(profile) {
  * @param name - candidate reference name.
  * @returns whether the name can be stored or resolved as a credential.
  */
-export function isCredentialRefName(name) {
+export function isCredentialRefName(name: unknown): boolean {
   return typeof name === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)
 }
 
@@ -105,7 +248,7 @@ export function isCredentialRefName(name) {
  * @param route - pi provider key.
  * @returns an upper-snake reference name in this bridge's namespace.
  */
-export function credentialRefFor(route) {
+export function credentialRefFor(route: string): string {
   const sanitized = String(route)
     .toUpperCase()
     .replace(/[^A-Z0-9]+/g, '_')
@@ -114,31 +257,31 @@ export function credentialRefFor(route) {
 }
 
 /** Positive integer or `undefined`. */
-function positiveInteger(value) {
-  return Number.isInteger(value) && value > 0 ? value : undefined
+function positiveInteger(value: unknown): number | undefined {
+  return Number.isInteger(value) && (value as number) > 0 ? value as number : undefined
 }
 
 /** The single distinct non-empty string in `values`, or `undefined`. */
-function uniqueValue(values) {
-  const seen = new Set()
+function uniqueValue(values: readonly unknown[]): string | undefined {
+  const seen = new Set<string>()
   for (const value of values) if (typeof value === 'string' && value.length > 0) seen.add(value)
   return seen.size === 1 ? [...seen][0] : undefined
 }
 
 /** Non-empty string or `undefined`. */
-function nonEmpty(value) {
+function nonEmpty(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
 /** Normalize a declared modality list against the adapter's vocabulary. */
-function modalities(input) {
+function modalities(input: unknown): string[] | undefined {
   if (!Array.isArray(input)) return undefined
   const kept = input.filter((value) => value === 'text' || value === 'image')
   return kept.length > 0 ? kept : undefined
 }
 
 /** `error.message` without assuming an Error instance. */
-function messageOf(error) {
+function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
@@ -151,7 +294,7 @@ function messageOf(error) {
  * @returns a literal value to store, an environment reference to name
  *   directly, a command marker, or nothing.
  */
-function classifyApiKey(value) {
+function classifyApiKey(value: unknown): ClassifiedApiKey {
   if (typeof value !== 'string' || value.length === 0) return undefined
   if (value.startsWith('$')) {
     const ref = value.slice(1)
@@ -167,7 +310,7 @@ function classifyApiKey(value) {
  * @param env - environment lookup.
  * @returns the literal value, or `undefined` when it cannot be resolved here.
  */
-function resolvePiValue(value, env) {
+function resolvePiValue(value: unknown, env: (name: string) => string | undefined): string | undefined {
   if (typeof value !== 'string' || value.length === 0) return undefined
   if (value.startsWith('$')) {
     const name = value.slice(1)
@@ -187,8 +330,8 @@ function resolvePiValue(value, env) {
  * @param map - pi's `thinkingLevelMap`.
  * @returns offered efforts, or `false` when no thinking level is offered.
  */
-function effortsFromMap(map) {
-  const efforts = {}
+function effortsFromMap(map: Record<string, string | null>): Record<string, string | null> | false {
+  const efforts: Record<string, string | null> = {}
   for (const level of LEVELS) {
     if (!(level in map)) {
       if (level === 'off') efforts.off = null
@@ -203,7 +346,7 @@ function effortsFromMap(map) {
 }
 
 /** The level set pi's providers use when a reasoning model declares no map. */
-function defaultEfforts() {
+function defaultEfforts(): Record<string, string | null> {
   return {
     off: null,
     minimal: 'minimal',
@@ -219,7 +362,7 @@ function defaultEfforts() {
  * @param base - the installed catalog model of the same id, when one exists.
  * @returns the adapter's `reasoningEfforts`, or `undefined` to inherit.
  */
-function reasoningEfforts(model, base) {
+function reasoningEfforts(model: PiModel, base: PiCatalogModel | undefined): Record<string, string | null> | false | undefined {
   if (model.reasoning === false) return false
   const reasoning = model.reasoning === true || base?.reasoning === true
   if (!reasoning) return undefined
@@ -233,11 +376,11 @@ function reasoningEfforts(model, base) {
  * @param api - the model's wire protocol.
  * @returns the accepted switches, or `undefined` when none remain.
  */
-function compatFor(compat, api) {
+function compatFor(compat: unknown, api: string): Record<string, unknown> | undefined {
   if (!compat || typeof compat !== 'object') return undefined
   const offered = COMPAT_FIELDS[api]
   if (!offered) return undefined
-  const filtered = {}
+  const filtered: Record<string, unknown> = {}
   for (const [field, value] of Object.entries(compat)) {
     if (!offered.has(field) || value === undefined) continue
     filtered[field] = value
@@ -251,9 +394,9 @@ function compatFor(compat, api) {
  * @param routes - pi provider keys in configuration order.
  * @returns route → reference name.
  */
-function credentialRefs(routes) {
-  const used = new Set()
-  const map = new Map()
+function credentialRefs(routes: string[]): Map<string, string> {
+  const used = new Set<string>()
+  const map = new Map<string, string>()
   for (const route of routes) {
     const base = credentialRefFor(route)
     let candidate = base
@@ -275,7 +418,7 @@ function credentialRefs(routes) {
  * @param context - catalog, environment, credential naming and note sink.
  * @returns `{ profile, credentials }` or `{ skip }`.
  */
-function convertProvider(route, provider, context) {
+function convertProvider(route: string, provider: PiProvider, context: ConvertContext): ProviderConversion {
   const { catalog, env, auth, options, notes } = context
   const catalogProvider = catalog?.get(route)
   const declared = Array.isArray(provider.models)
@@ -299,7 +442,7 @@ function convertProvider(route, provider, context) {
   const baseURL = nonEmpty(provider.baseUrl) ?? sharedDeclaredBase ?? nonEmpty(catalogProvider?.baseUrl)
   if (!baseURL) return { skip: 'declares no baseUrl and no installed catalog entry describes one' }
 
-  const models = []
+  const models: ProfileModel[] = []
   for (const model of modelsIn) {
     if (typeof model.api === 'string' && model.api !== api) {
       notes.push({ route, model: model.id, reason: `per-model api "${model.api}" cannot be expressed once a route pins "${api}"` })
@@ -310,7 +453,7 @@ function convertProvider(route, provider, context) {
       continue
     }
     const base = catalogProvider?.models.get(model.id)
-    const entry = { id: model.id }
+    const entry = { id: model.id } as ProfileModel
     const name = nonEmpty(model.name) ?? nonEmpty(base?.name)
     if (name) entry.name = name
     entry.contextWindow = positiveInteger(model.contextWindow) ?? positiveInteger(base?.contextWindow) ?? PI_DEFAULT_CONTEXT_WINDOW
@@ -324,15 +467,15 @@ function convertProvider(route, provider, context) {
   }
   if (models.length === 0) return { skip: 'declares no usable models' }
 
-  const profile = {
+  const profile: ProviderProfile = {
     displayName: nonEmpty(provider.name) ?? nonEmpty(catalogProvider?.name) ?? route,
     api,
     baseURL,
     models,
   }
 
-  const credentials = []
-  const commands = []
+  const credentials: CredentialWrite[] = []
+  const commands: CommandKey[] = []
   const classified = classifyApiKey(provider.apiKey)
   if (classified?.kind === 'reference') {
     profile.apiKeyEnv = classified.ref
@@ -359,7 +502,7 @@ function convertProvider(route, provider, context) {
   if (compat) profile.compat = compat
 
   if (provider.headers && typeof provider.headers === 'object') {
-    const headers = {}
+    const headers: Record<string, string> = {}
     for (const [header, raw] of Object.entries(provider.headers)) {
       const value = resolvePiValue(raw, env)
       if (value === undefined) {
@@ -380,24 +523,24 @@ function convertProvider(route, provider, context) {
  * @returns adapter profiles keyed by route, the credentials they need, and
  *   every route or model that could not be projected.
  */
-export function convertPiConfig(input) {
+export function convertPiConfig(input: ConvertInput): ConvertResult {
   const { models, auth, catalog, options } = input
-  const notes = []
-  const skipped = []
-  const providers = {}
-  const credentials = []
-  const commands = []
+  const notes: ConversionNote[] = []
+  const skipped: SkippedRoute[] = []
+  const providers: Record<string, ProviderProfile> = {}
+  const credentials: CredentialWrite[] = []
+  const commands: CommandKey[] = []
 
   const routes = Object.keys(models?.providers ?? {})
   const refs = credentialRefs(routes)
   const env = input.env ?? ((name) => process.env[name])
 
   for (const route of routes) {
-    if (options?.include?.length > 0 && !options.include.includes(route)) continue
+    if (options?.include?.length! > 0 && !options!.include!.includes(route)) continue
     if (options?.exclude?.includes(route)) continue
     const provider = models.providers[route]
     if (!provider || typeof provider !== 'object') continue
-    let result
+    let result: ProviderConversion
     try {
       result = convertProvider(route, provider, {
         catalog,
@@ -414,7 +557,7 @@ export function convertPiConfig(input) {
       skipped.push({ route, reason: result.skip })
       continue
     }
-    providers[route] = result.profile
+    providers[route] = result.profile!
     for (const credential of result.credentials ?? []) credentials.push(credential)
     for (const command of result.commands ?? []) commands.push(command)
   }

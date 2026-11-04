@@ -16,16 +16,15 @@
   "license": "MIT",
   "author": "cyzlmh",
   "type": "module",
-  "packageManager": "pnpm@11.15.0",
-  "main": "index.js",
+  "main": "lib/index.js",
   "exports": {
-    ".": "./index.js",
+    ".": "./lib/index.js",
     "./locale/*.json": "./locale/*.json",
-    "./icon": "./icon.svg"
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
   },
   "files": [
-    "index.js",
-    "src/*.js",
+    "lib",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
@@ -34,8 +33,14 @@
     "LICENSE"
   ],
   "icon": "icon.svg",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
+  },
   "engines": {
-    "node": "^20.19.0 || >=22.12.0",
+    "node": "^22.19.0 || >=24.0.0",
     "dsh": ">=0.2.1-rc.2 <0.3.0"
   },
   "dsh": {
@@ -46,6 +51,11 @@
   },
   "peerDependencies": {
     "@deepseek-ai/schemastery": "~3.18.5"
+  },
+  "devDependencies": {
+    "@deepseek-ai/schemastery": "~3.18.5",
+    "@types/node": "^26.6.6",
+    "typescript": "^5.9.3"
   },
   "repository": {
     "type": "git",

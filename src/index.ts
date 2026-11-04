@@ -15,6 +15,7 @@
 import { statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import schema from '@deepseek-ai/schemastery'
+import type { BridgeContext } from './bridge.js'
 
 export const name = 'pi-models'
 
@@ -23,7 +24,7 @@ export const inject = ['llm']
 
 /**
  * Loader-visible configuration schema. The defaults mirror the DEFAULTS table
- * in src/bridge.js so the Loader, the profile's validation, and the runtime
+ * in src/bridge.ts so the Loader, the profile's validation, and the runtime
  * all agree. The bridge's own normalizeConfig still applies as the last word
  * inside apply().
  *
@@ -49,8 +50,8 @@ export const Config = schema.object({
  * that make up the bridge.
  * @returns an opaque version string.
  */
-function implementationVersion() {
-  const files = ['./src/bridge.js', './src/convert.js', './src/catalog.js', './src/project.js']
+function implementationVersion(): string {
+  const files = ['./bridge.js', './convert.js', './catalog.js', './project.js']
   let newest = 0
   for (const file of files) {
     try {
@@ -67,13 +68,18 @@ function implementationVersion() {
  * @param ctx - the plugin context.
  * @param config - the row's `config` object.
  */
-export async function apply(ctx, config) {
+export async function apply(ctx: BridgeContext, config: unknown): Promise<void> {
   const version = implementationVersion()
-  const [bridge, convert, catalog, projection] = await Promise.all([
-    import(`./src/bridge.js?v=${version}`),
-    import(`./src/convert.js?v=${version}`),
-    import(`./src/catalog.js?v=${version}`),
-    import(`./src/project.js?v=${version}`),
+  const [bridge, convert, catalog, projection]: [
+    typeof import('./bridge.js'),
+    typeof import('./convert.js'),
+    typeof import('./catalog.js'),
+    typeof import('./project.js'),
+  ] = await Promise.all([
+    import(`./bridge.js?v=${version}`),
+    import(`./convert.js?v=${version}`),
+    import(`./catalog.js?v=${version}`),
+    import(`./project.js?v=${version}`),
   ])
   return bridge.apply(ctx, config, {
     loadPiCatalog: catalog.loadPiCatalog,

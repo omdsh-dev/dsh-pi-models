@@ -16,6 +16,84 @@
  * @module dsh-pi-models/project
  */
 
+// Type-only imports are fully erased, so the emitted module stays import-free
+// for the entry's versioned import, exactly as the notes below require.
+import type { CredentialWrite, ProviderProfile } from './convert.js'
+
+/** `apiKeySync` policy: rewrite differing values, fill only unset references, or leave the store alone. */
+export type ApiKeySyncPolicy = 'always' | 'if-missing' | 'never'
+
+/** `prune` policy: drop only managed routes, drop everything undeclared, or keep everything. */
+export type PrunePolicy = 'managed' | 'none' | 'all'
+
+/** The credential-store service the composition may mount. */
+export interface CredentialService {
+  resolve(ref: string): Promise<{ value?: string } | undefined>
+  set(ref: string, value: string): Promise<unknown>
+}
+
+/** Counts of written and already-matching credential references. */
+export interface CredentialSummary {
+  synced: number
+  unchanged: number
+  failed: number
+}
+
+/** The logger slice this bridge writes to. */
+export interface PiModelsLogger {
+  info(message: string): void
+  warn(message: string): void
+  debug(message: string): void
+}
+
+/** One configurable-entry row as the settings service describes it. */
+export interface SettingsRowDescriptor {
+  ns: string
+  user?: unknown
+  revision?: unknown
+}
+
+/** The settings service slice the projection writes through. */
+export interface SettingsService {
+  describe(): SettingsRowDescriptor[]
+  replace(ns: string, section: { providers: Record<string, ProviderProfile> }, revision: unknown): Promise<unknown>
+}
+
+/** The context slice projectProviders reads (`settings` service plus the LLM registry). */
+export interface ProjectContext {
+  get(name: 'settings'): SettingsService | undefined
+  llm: { listProviders(): Array<{ id: string }> }
+}
+
+/** The configuration fields projectProviders reads. */
+export interface ProjectConfig {
+  targetEntry: string
+  prune: PrunePolicy
+}
+
+/** projectProviders' options: projected profiles, config and logging. */
+export interface ProjectOptions {
+  profiles: Record<string, ProviderProfile>
+  config: ProjectConfig
+  logger: PiModelsLogger
+}
+
+/** What one projection changed. */
+export interface ProjectionResult {
+  changed: boolean
+  routes: number
+  models: number
+  pruned: string[]
+  blocked: SkippedBlock[]
+  revision: unknown
+}
+
+/** A route the projection refused to write, with the reason why. */
+export interface SkippedBlock {
+  route: string
+  reason: string
+}
+
 /**
  * Whether a configured route carries this bridge's generated credential
  * reference. Kept here as well as in the conversion so this module stays
@@ -26,17 +104,17 @@
  * @param profile - one configured provider profile.
  * @returns whether this bridge generated the profile's credential reference.
  */
-function isManagedProfile(profile) {
+function isManagedProfile(profile: { apiKeyEnv?: unknown } | null | undefined): boolean {
   const ref = profile?.apiKeyEnv
   return typeof ref === 'string' && ref.startsWith('PI_MODELS_') && ref.endsWith('_API_KEY')
 }
 
 /** Stable JSON rendering, so key order alone never counts as a change. */
-function stableJson(value) {
+function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
   if (value && typeof value === 'object') {
     const keys = Object.keys(value).sort()
-    return `{${keys.map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`).join(',')}}`
   }
   return JSON.stringify(value) ?? 'undefined'
 }
@@ -50,7 +128,7 @@ function stableJson(value) {
  * @param logger - sink for per-reference failures.
  * @returns counts of written and already-matching references.
  */
-export async function syncCredentials(credentials, entries, policy, logger) {
+export async function syncCredentials(credentials: CredentialService | undefined, entries: CredentialWrite[], policy: ApiKeySyncPolicy, logger: PiModelsLogger): Promise<CredentialSummary> {
   const summary = { synced: 0, unchanged: 0, failed: 0 }
   if (policy === 'never') return summary
   if (credentials === undefined) {
@@ -91,9 +169,9 @@ export async function syncCredentials(credentials, entries, policy, logger) {
  *   every configured route.
  * @returns the next dictionary and the routes it dropped.
  */
-export function buildProviders(current, profiles, policy) {
-  const pruned = []
-  const next = policy === 'all' ? {} : { ...current }
+export function buildProviders(current: Record<string, ProviderProfile>, profiles: Record<string, ProviderProfile>, policy: PrunePolicy): { providers: Record<string, ProviderProfile>, pruned: string[] } {
+  const pruned: string[] = []
+  const next: Record<string, ProviderProfile> = policy === 'all' ? {} : { ...current }
   for (const [route, profile] of Object.entries(profiles)) next[route] = profile
   if (policy === 'none') return { providers: next, pruned }
   for (const [route, profile] of Object.entries(current)) {
@@ -106,15 +184,15 @@ export function buildProviders(current, profiles, policy) {
 }
 
 /** The `providers` dictionary of one settings section. */
-function providersOf(section) {
+function providersOf(section: unknown): Record<string, ProviderProfile> {
   if (!section || typeof section !== 'object' || Array.isArray(section)) return {}
-  const providers = section.providers
+  const providers = (section as { providers?: unknown }).providers
   if (!providers || typeof providers !== 'object' || Array.isArray(providers)) return {}
-  return providers
+  return providers as Record<string, ProviderProfile>
 }
 
 /** Describe the target entry, or explain why it cannot be configured. */
-function describeTarget(settings, targetEntry) {
+function describeTarget(settings: SettingsService, targetEntry: string): SettingsRowDescriptor {
   const rows = settings.describe()
   // Loader entry ids carry their include path (`include:llm-pi-ai`), while the
   // patch row — the name a person writes — is the bare id. Accept both.
@@ -144,7 +222,7 @@ const HMR_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 4000]
  * @param logger - sink for the eventual failure.
  * @returns the write's result.
  */
-async function withHmrRetry(operation, logger) {
+async function withHmrRetry(operation: () => Promise<ProjectionResult>, logger: PiModelsLogger): Promise<ProjectionResult> {
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await operation()
@@ -164,14 +242,14 @@ async function withHmrRetry(operation, logger) {
  * @param options - projected profiles, config and logging.
  * @returns what changed.
  */
-export async function projectProviders(ctx, options) {
+export async function projectProviders(ctx: ProjectContext, options: ProjectOptions): Promise<ProjectionResult> {
   const { profiles, config, logger } = options
   const settings = ctx.get('settings')
   if (settings === undefined) {
     throw new Error('pi-models: this composition mounts no settings service, so the pi-ai entry cannot be configured; mount @deepseek-ai/dsh-settings and @deepseek-ai/dsh-config-editor')
   }
 
-  const apply = async (attempt) => {
+  const apply = async (attempt: number): Promise<ProjectionResult> => {
     const descriptor = describeTarget(settings, config.targetEntry)
     // Compare and build from the profile's own override, not the effective
     // value: the latter carries schema defaults, so comparing against it would
@@ -181,8 +259,8 @@ export async function projectProviders(ctx, options) {
     // A route the target adapter already serves is not a collision: rewriting
     // its entry is how the projection updates it.
     const taken = new Set(ctx.llm.listProviders().map((provider) => provider.id))
-    const blocked = []
-    const projected = {}
+    const blocked: SkippedBlock[] = []
+    const projected: Record<string, ProviderProfile> = {}
     for (const [route, profile] of Object.entries(profiles)) {
       if (taken.has(route) && !Object.hasOwn(current, route)) {
         blocked.push({ route, reason: 'another adapter already serves this route' })

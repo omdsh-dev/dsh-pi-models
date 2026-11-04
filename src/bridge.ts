@@ -20,8 +20,86 @@ import { readFileSync, unwatchFile, watchFile } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
+import type { PiCatalogResult } from './catalog.js'
+import type { CommandKey, ConvertInput, ConvertResult, CredentialWrite } from './convert.js'
+import type {
+  ApiKeySyncPolicy,
+  CredentialService,
+  CredentialSummary,
+  PiModelsLogger,
+  PrunePolicy,
+  ProjectContext,
+  ProjectionResult,
+  ProjectOptions,
+  SettingsService,
+} from './project.js'
 
-const execFileAsync = promisify(execFile)
+const execFileAsync = promisify(execFile) as (file: string, args: string[], options: { cwd: string, timeout: number, maxBuffer: number, windowsHide: boolean }) => Promise<{ stdout: string, stderr: string }>
+
+/** `commandKeys` policy: run pi's `!command` key sources, or leave their routes keyless. */
+export type CommandKeysPolicy = 'execute' | 'skip'
+
+/** Every field this plugin reads, with defaults applied. */
+export interface NormalizedConfig {
+  piDirectory: string
+  modelsFile: string
+  authFile: string
+  targetEntry: string
+  apiKeySync: ApiKeySyncPolicy
+  commandKeys: CommandKeysPolicy
+  prune: PrunePolicy
+  includeCatalogModels: boolean
+  include: string[]
+  exclude: string[]
+  watch: boolean
+  pollIntervalMs: number
+}
+
+/** One HMR transaction handle, when the Loader's HMR service is mounted. */
+interface HmrTransaction {
+  getStore?(): unknown
+  exit?<T>(operation: () => T): T
+}
+
+/** The HMR service slice this bridge consults before writing configuration. */
+export interface HmrService {
+  executing?: HmrTransaction
+}
+
+/** The injected child context this bridge runs its sync loop on. */
+export interface InjectChild {
+  logger: PiModelsLogger
+  llm: { listProviders(): Array<{ id: string }> }
+  get(name: 'settings'): SettingsService | undefined
+  get(name: 'credentials'): CredentialService | undefined
+  get(name: 'hmr'): HmrService | undefined
+  effect(teardown: () => () => void, label?: string): unknown
+}
+
+/** The cordis plugin context slice this bridge's apply() touches. */
+export interface BridgeContext {
+  effect(teardown: () => () => void, label?: string): unknown
+  inject(services: string[], callback: (child: InjectChild) => void): unknown
+}
+
+/** The collaborator modules the entry hands in through its versioned import. */
+export interface BridgeModules {
+  loadPiCatalog: () => Promise<PiCatalogResult>
+  convertPiConfig: (input: ConvertInput) => ConvertResult
+  projectProviders: (ctx: ProjectContext, options: ProjectOptions) => Promise<ProjectionResult>
+  syncCredentials: (credentials: CredentialService | undefined, entries: CredentialWrite[], policy: ApiKeySyncPolicy, logger: PiModelsLogger) => Promise<CredentialSummary>
+}
+
+/** The bridge's mutable runtime state for one mounted row. */
+interface BridgeState {
+  disposed: boolean
+  chain: Promise<void>
+  timer: ReturnType<typeof setTimeout> | undefined
+  reported: Map<string, string>
+}
+
+/** Log a message once per distinct text, so a watched file does not spam. */
+type Report = (key: string, level: 'info' | 'warn' | 'debug', message: string) => void
 
 /**
  * Defaults for every field this plugin reads.
@@ -31,7 +109,7 @@ const execFileAsync = promisify(execFile)
  * as the last word inside apply(). Unknown fields are ignored, and a
  * malformed field fails activation with a message naming it.
  */
-const DEFAULTS = {
+const DEFAULTS: NormalizedConfig = {
   /** pi agent directory; empty means `$PI_CODING_AGENT_DIR`, then `~/.pi/agent`. */
   piDirectory: '',
   /** Absolute `models.json`; empty means `<piDirectory>/models.json`. */
@@ -58,7 +136,7 @@ const DEFAULTS = {
   pollIntervalMs: 3000,
 }
 
-const ENUMS = {
+const ENUMS: Record<string, string[]> = {
   apiKeySync: ['always', 'if-missing', 'never'],
   commandKeys: ['execute', 'skip'],
   prune: ['managed', 'none', 'all'],
@@ -74,9 +152,9 @@ const LISTS = ['include', 'exclude']
  * @returns every field this plugin reads, with defaults applied.
  * @throws when a field has the wrong shape.
  */
-export function normalizeConfig(raw) {
+export function normalizeConfig(raw: unknown): NormalizedConfig {
   const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
-  const config = { ...DEFAULTS }
+  const config: NormalizedConfig & Record<string, any> = { ...DEFAULTS }
   for (const [key, value] of Object.entries(source)) if (Object.hasOwn(DEFAULTS, key)) config[key] = value
   for (const key of STRINGS) if (typeof config[key] !== 'string') throw new TypeError(`pi-models: config.${key} must be a string`)
   if (config.targetEntry.length === 0) throw new TypeError('pi-models: config.targetEntry must not be empty')
@@ -96,7 +174,7 @@ export function normalizeConfig(raw) {
  * @param path - configured or derived path.
  * @returns an absolute path.
  */
-function absolute(path) {
+function absolute(path: string): string {
   if (path === '~') return homedir()
   if (path.startsWith('~/') || path.startsWith('~\\')) return join(homedir(), path.slice(2))
   return resolve(path)
@@ -107,7 +185,7 @@ function absolute(path) {
  * @param config - the resolved plugin configuration.
  * @returns the pi directory and the two files it may read.
  */
-function pathsOf(config) {
+function pathsOf(config: NormalizedConfig) {
   const configured = config.piDirectory.length > 0
     ? config.piDirectory
     : process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi', 'agent')
@@ -124,11 +202,11 @@ function pathsOf(config) {
  * @param path - absolute file path.
  * @returns the parsed document, or `undefined` when the file does not exist.
  */
-function readJson(path) {
+function readJson(path: string) {
   try {
     return JSON.parse(readFileSync(path, 'utf8'))
   } catch (error) {
-    if (error && typeof error === 'object' && error.code === 'ENOENT') return undefined
+    if (error && typeof error === 'object' && (error as { code?: unknown }).code === 'ENOENT') return undefined
     throw new Error(`cannot read ${path}: ${error instanceof Error ? error.message : String(error)}`)
   }
 }
@@ -138,7 +216,7 @@ function readJson(path) {
  * @param command - the shell text after pi's `!` marker.
  * @returns the key the command printed.
  */
-async function runKeyCommand(command) {
+async function runKeyCommand(command: string): Promise<string> {
   const shell = process.platform === 'win32' ? 'cmd.exe' : '/bin/sh'
   const args = process.platform === 'win32' ? ['/d', '/s', '/c', command] : ['-c', command]
   const { stdout } = await execFileAsync(shell, args, {
@@ -157,7 +235,7 @@ async function runKeyCommand(command) {
  * @param report - de-duplicated logger.
  * @returns credential writes for the commands that produced a value.
  */
-async function resolveCommandKeys(commands, policy, report) {
+async function resolveCommandKeys(commands: CommandKey[], policy: CommandKeysPolicy, report: Report): Promise<CredentialWrite[]> {
   if (policy === 'skip') {
     for (const entry of commands) {
       report(`command-skip:${entry.route}`, 'warn', `pi-models: provider "${entry.route}" keeps its key in a command; commandKeys is "skip", so set that key from the Models page if you need the route`)
@@ -187,9 +265,9 @@ async function resolveCommandKeys(commands, policy, report) {
  * @param rawConfig - the row's `config` object.
  * @param modules - `{ loadPiCatalog, convertPiConfig, projectProviders, syncCredentials }`.
  */
-export function apply(ctx, rawConfig, modules) {
+export function apply(ctx: BridgeContext, rawConfig: unknown, modules: BridgeModules): void {
   const config = normalizeConfig(rawConfig)
-  const state = {
+  const state: BridgeState = {
     disposed: false,
     chain: Promise.resolve(),
     timer: undefined,
@@ -208,7 +286,7 @@ export function apply(ctx, rawConfig, modules) {
     const logger = child.logger
 
     /** Log a message once per distinct text, so a watched file does not spam. */
-    const report = (key, level, message) => {
+    const report: Report = (key, level, message) => {
       if (state.reported.get(key) === message) return
       // Keys embed error details, which can vary without bound; cap the map
       // so a long-lived Host plugin does not grow it forever. Clearing loses
@@ -218,7 +296,7 @@ export function apply(ctx, rawConfig, modules) {
       logger[level](message)
     }
 
-    const sync = async (reason) => {
+    const sync = async (reason: string): Promise<void> => {
       if (state.disposed) return
       const models = readJson(paths.models)
       if (models === undefined) {
@@ -287,19 +365,19 @@ export function apply(ctx, rawConfig, modules) {
      * @param operation - the sync to run.
      * @returns the operation's result.
      */
-    const outsideTransaction = (operation) => {
+    const outsideTransaction = <T>(operation: () => T): T => {
       const executing = child.get('hmr')?.executing
       const nested = typeof executing?.getStore === 'function' && executing.getStore() !== undefined
       return nested && typeof executing.exit === 'function' ? executing.exit(operation) : operation()
     }
 
-    const enqueue = (reason) => {
+    const enqueue = (reason: string): void => {
       state.chain = state.chain.then(() => outsideTransaction(() => sync(reason))).catch((error) => {
         report(`error:${reason}`, 'warn', `pi-models: sync failed: ${error instanceof Error ? error.message : String(error)}`)
       })
     }
 
-    const schedule = (reason) => {
+    const schedule = (reason: string): void => {
       if (state.disposed) return
       if (state.timer !== undefined) clearTimeout(state.timer)
       state.timer = setTimeout(() => {

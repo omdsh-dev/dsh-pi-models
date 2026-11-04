@@ -78,8 +78,9 @@ pi 保持唯一数据源。文件被监听：在 `~/.pi/agent/models.json` 中�
 
 ## 开发期间重载
 
-入口模块通过携带实现修改时间的 URL 加载 `src/*.js`，因此重载 `pi-models` 行
-（或重装 bundle）会运行磁盘上当前的代码。只有改动 `index.js` 本身需要重启
+入口模块通过携带实现修改时间的 URL 加载 `lib/*.js`，因此重载 `pi-models` 行
+（或重装 bundle）会运行磁盘上当前的代码。开发时 `npm run dev`（tsc --watch）
+会在你编辑 `src/` 时持续更新 `lib/`。只有改动 `lib/index.js` 本身需要重启
 Harness；`config: { watch: true }` 已能在 `models.json` 变化时无需任何重载即可
 重新投影。
 
@@ -92,7 +93,7 @@ Harness；`config: { watch: true }` 已能在 `models.json` 变化时无需任�
 
 ## 安装
 
-本插件以 GitHub Release tarball 形式分发（无需 npm 构建步骤）。在 profile 目录
+本插件以 GitHub Release tarball 形式分发，内含编译好的 `lib/` 产物，零运行时依赖。在 profile 目录
 下安装最新 release tag，或下载 pack 后本地安装：
 
 ```sh

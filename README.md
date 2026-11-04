@@ -90,11 +90,12 @@ last projection in place, still usable and editable.
 
 ## Reloading during development
 
-The entry module loads `src/*.js` through a URL carrying the implementation's
+The entry module loads `lib/*.js` through a URL carrying the implementation's
 modification time, so reloading the `pi-models` row (or reinstalling the
-bundle) runs the code currently on disk. Only a change to `index.js` itself
-needs a Harness restart; `config: { watch: true }` already re-projects on
-`models.json` changes without any reload.
+bundle) runs the code currently on disk. During development, `npm run dev`
+(tsc --watch) keeps `lib/` fresh as you edit `src/`. Only a change to
+`lib/index.js` itself needs a Harness restart; `config: { watch: true }`
+already re-projects on `models.json` changes without any reload.
 
 ## Failure and recovery
 
@@ -107,7 +108,8 @@ needs a Harness restart; `config: { watch: true }` already re-projects on
 
 ## Install
 
-This plugin is distributed as a GitHub Release tarball (no npm build step).
+This plugin is distributed as a GitHub Release tarball carrying the compiled
+`lib/` output, with zero runtime dependencies.
 From the profile directory, install the latest release tag, or fetch the pack
 and install it locally:
 
